@@ -37,7 +37,7 @@ chunk_overlap = config["chunk_overlap"]
 
 
 #Initialize Database and LLM
-vector_db, collection = initialize_vector_database("vector_db", collection, "vector_db", embeddings_framework, embeddings_model)
+vector_db_text, vector_db_images, text_collection, image_collection = initialize_multimodal_vector_database("vector_db", collection, "vector_db", embeddings_framework, embeddings_model)
 llm = get_chat_model(chat_framework, chat_model)
 #llm = Ollama(model="llama3", temperature = 0)
 
@@ -56,7 +56,8 @@ prompt = ChatPromptTemplate.from_template(template)
 writer = ClassificationWriter()
 
 actions = [
-        cl.Action(name="Select pdf", value="upload_pdf", description="Upload PDF Documents"),
+        cl.Action(name="Embed dataset", value="embed_dataset", description="Select dataset to embed (only supports NLMCXR small)"),
+        cl.Action(name="Retrieve Report", value="retrieve_import", description="Retrive similar reports to the one provided"),
         cl.Action(name="Delete Document from DB", value="delete_doc", description="Choose a document to delete"),
         cl.Action(name="Good Answer", value="True", description="Provide Feedback"),
         cl.Action(name="Bad Answer", value="False", description="Provide Feedback"),
@@ -78,7 +79,7 @@ async def on_chat_start():
         | StrOutputParser()
     )
     #msg = cl.Message(content="")
-    ids = get_document_prefixes(collection, delimiter)
+    ids = get_document_prefixes(text_collection, delimiter)
     print(ids)
     msg = cl.Message(
         content=f"Documents stored in the database:`{ids}`. Ask a question or add new documents.")
@@ -100,7 +101,7 @@ async def on_message(message: cl.Message):
     random_id = generate_random_id(id_length, id_chars)
     # Update chat history with the message content
     writer.update_chat_history(random_id, message.content)
-    similars = get_number_relevant_documents(vector_db, message.content, threshold, collection)
+    similars = get_number_relevant_documents(vector_db_text, message.content, threshold, collection)
     print(f"Documents with distance below the threshold: {similars}")    
     if similars == 0:
             '''If no document has a distance below the threshold, there should be no added context.  '''
@@ -179,32 +180,40 @@ async def on_action(action):
     classification = "Bad"
     writer.update_classifications(classification)
     
-@cl.action_callback("Select pdf") # Upload PDF, choose ID, and embed in the database
+@cl.action_callback("Embed dataset") # Upload PDF, choose ID, and embed in the database
 async def on_action(action): 
     files = None
     # Wait for the user to upload a file
-    files = await cl.AskFileMessage(
-        content="Please upload a pdf file to add to the knowledge database!", accept=["application/pdf"]
-        ).send()
-    text_file = files[0]
+    #files = await cl.AskFileMessage(
+    #    content="Please upload a pdf file to add to the knowledge database!", accept=["json"]
+    #    ).send()
+    #text_file = files[0]
     # Let the user know that the file has been uploaded and is being processed    
-    await cl.Message( content=f"`{text_file.name}` uploaded! Processing the file..." ).send()
+    #await cl.Message( content=f"`{text_file.name}` uploaded! Processing the file..." ).send()
     
     # Ask the user for input id, convert to string
-    id = await cl.AskUserMessage(content="Choose document id (write below and send)", timeout=10).send()   
-    id_str = str(id['output'])
+    #id = await cl.AskUserMessage(content="Choose document id (write below and send)", timeout=10).send()   
+    #id_str = str(id['output'])
+    
     
     #add_pdf_to_vectorstore_simple(text_file, id_str, collection, delimiter, embeddings_framework, embeddings_model)
-    add_pdf_to_vectorstore_complete(text_file, id_str, collection, delimiter, embeddings_framework, embeddings_model, chunk_size, chunk_overlap)
+    add_NLMCXR_to_vectorstore('/home/ccig/Desktop/Nuno/rag_data/dataset_small.json', text_collection, image_collection, delimiter, embeddings_framework, 'llama3.1', 'llava')
+    #add_pdf_to_vectorstore_complete(text_file, id_str, collection, delimiter, embeddings_framework, embeddings_model, chunk_size, chunk_overlap)
     
      # Print the number of documents in the collection to check if changes were made
     print(f"Number of documents in the database: {collection.count()}")
 
     #Confirm the embeddings were succesful
     msg = cl.Message(
-        content=f"`{text_file.name}` embedded in the knowledge database! Ready to use. \n Documents on the database: `{get_document_prefixes(collection, delimiter)}`")
+        content=f"dataset_small embedded in the knowledge database! Ready to use. \n Documents on the database: `{get_document_prefixes(collection, delimiter)}`")
     msg.actions = actions
     await msg.send()
+
+@cl.action_callback("Retrieve Report") # Upload PDF, choose ID, and embed in the database
+async def on_action(action): 
+    files = None
+
+    retrieve_similar_report(vector_db_text, '/home/ccig/Desktop/Nuno/rag_data/query_test.json', 0, text_collection)
     
     
 @cl.action_callback("Delete Document from DB") 
