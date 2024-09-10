@@ -1,0 +1,114 @@
+import json
+from reportlab.lib.pagesizes import letter, A3
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch,  cm
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+import PIL
+
+def json_to_pdf(json_data, output_filename):
+    # Parse JSON data
+    data = json.loads(json_data)
+    
+    # Set small margins (1 cm on each side)
+    margins = (1*cm, 1*cm, 1*cm, 1*cm)  # left, top, right, bottom
+    page_width, page_height = A3
+
+    # Create PDF document
+    doc = SimpleDocTemplate(output_filename, pagesize=A3, leftMargin=margins[0], topMargin=margins[1], rightMargin=margins[2], bottomMargin=margins[3])
+    story = []
+    
+    # Get styles
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name='Center', alignment=TA_CENTER))
+
+    style1 = ParagraphStyle('Title', parent=styles['Normal'], alignment=TA_LEFT, fontSize=20)  # Paragraph 1 with font size 12
+    style2 = ParagraphStyle('Headings', parent=styles['Normal'], alignment=TA_LEFT, fontSize=18)  # Paragraph 2 with font size 14
+    style3 = ParagraphStyle('Text', parent=styles['Normal'], alignment=TA_LEFT, fontSize=16)  # Paragraph 3 with font size 16
+    
+    # Add title
+    title = Paragraph(f"Report for {data['CXR1000']['uid']}", style1)
+    story.append(title)
+    story.append(Spacer(1, 12))
+    
+    # Add date
+    date = Paragraph(f"Date: {data['CXR1000']['date']}", style3)
+    story.append(date)
+    story.append(Spacer(1, 12))
+    
+    # Add report details
+    report = data['CXR1000']['report']
+    for key, value in report.items():
+        story.append(Paragraph(f"{key.capitalize()}:", style2))
+        story.append(Spacer(1, 5))
+        story.append(Paragraph(value, style3))
+        story.append(Spacer(1, 12))
+    
+    # Add a page break before the first image
+    #story.append(PageBreak())
+
+    '''
+    # Add images
+    for i, (image_key, image_data) in enumerate(data['CXR1000']['images'].items()):
+        story.append(Paragraph(f"Image: {image_key}", styles['Heading3']))
+        story.append(Paragraph(image_data['caption'], styles['Normal']))
+        try:
+            # Calculate image width to fit within margins
+            available_width = A2[0] - margins[0] - margins[2]
+            img = Image(image_data['path'])  # Maintain aspect ratio
+            story.append(img)
+        except:
+            story.append(Paragraph("Image not found or couldn't be loaded.", styles['Normal']))
+        story.append(Spacer(1, 15))
+
+        # Add a page break after each image, except for the last one
+        #if i < len(data['CXR1000']['images']) - 1:
+        #    story.append(PageBreak())
+    '''
+
+    # Prepare images
+    images = []
+    for image_key, image_data in data['CXR1000']['images'].items():
+        #caption = Paragraph(image_data['caption'], styles['Center'])
+        try:
+            temp_img = PIL.Image.open(image_data['path'])
+            original_w, original_h = temp_img.size
+            img = Image(image_data['path'], width=original_w/1.7, height=original_h/1.7)
+            w = img.imageWidth/1.7
+            print(w)
+        except:
+            print('lol')
+            img = Paragraph("Image not found or couldn't be loaded.", styles['Normal'])
+        images.append((img, w))
+    
+    # Create tables for side-by-side images
+    available_width = page_width - margins[0] - margins[2]
+    while images:
+        row = []
+        row_width = 0
+        while images and row_width + images[0][1] <= available_width:
+
+            image = images.pop(0)
+            row.append(image[0])
+            row_width += image[1]
+
+        col_widths = [img.wrap(0, 0)[0] for img in row]
+        tabled_data = [row]
+        print(row)
+        print(row_width)
+        print(col_widths)
+        table = Table(tabled_data, colWidths=col_widths)
+        table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        
+        story.append(table)
+        story.append(Spacer(1, 15))
+    
+    # Build PDF
+    doc.build(story)
