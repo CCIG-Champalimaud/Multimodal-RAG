@@ -1,8 +1,8 @@
 from langchain_community.document_loaders import PyPDFLoader
-import chromadb
+
 import ollama  # Import the missing module
 from langchain_community.embeddings import OllamaEmbeddings
-from langchain_community.vectorstores import Chroma
+from pymilvus import connections, Collection, FieldSchema, CollectionSchema, DataType
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import yaml
 from langchain_community.llms import Ollama
@@ -12,134 +12,124 @@ from tqdm import tqdm
 import json
 from PIL import Image
 import os
+from glob import glob
 from io import BytesIO
 from langchain.embeddings.base import Embeddings
-from transformers import AutoProcessor, AutoModel, AutoTokenizer, AutoFeatureExtractor, CLIPImageProcessor
+from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
+from qwen_vl_utils import process_vision_info
 import torch
 import torch.nn.functional as F
 import numpy as np
 import math
 import matplotlib.pyplot as plt
 import tempfile
+from colpali_engine.models.paligemma_colbert_architecture import ColPali
+from colpali_engine.utils.colpali_processing_utils import process_images, process_queries
+from colpali_engine.utils.image_from_page_utils import load_from_dataset
+from pdf2image import convert_from_path
+from torch.utils.data import DataLoader
+from byaldi import RAGMultiModalModel
 
-def initialize_multimodal_vector_database(path, persist_directory, collection_names=['documents', 'images']):
+def initialize_multimodal_vector_database():
     # Create a persistent client and a collection for the vector database
-    client = chromadb.PersistentClient(path=path)
-    text_collection = client.get_or_create_collection(
-        name='documents',
-        metadata={"hnsw:space": "cosine"})
-    image_collection = client.get_or_create_collection(
-        name='images',
-        metadata={"hnsw:space": "cosine"})
+    if os.path.exists(".byaldi/Documents"):
+        RAG = RAGMultiModalModel.from_index("Documents", verbose=0)
+        metadata = json.load(open("metadata.json"))
+        metadata = {int(key): value for key, value in metadata.items()}
 
-    embedding_function = ReportAndImageEmbeddings()
+        return RAG, metadata
+    else:
+        RAG = RAGMultiModalModel.from_pretrained("vidore/colpali", device='cuda:2', verbose=0)
 
-    # Load the previously stored documents into a Chroma vectorstore
-    vectordb_text = Chroma(persist_directory=persist_directory+'_text',
-                      client=client,
-                      embedding_function=embedding_function,
-                      collection_name=collection_names[0],
-                      collection_metadata={"hnsw:space": "cosine"})
-    vectordb_images = Chroma(persist_directory=persist_directory+'_images',
-                      client=client,
-                      embedding_function=embedding_function,
-                      collection_name=collection_names[1],
-                      collection_metadata={"hnsw:space": "cosine"})
+    return RAG, {}
 
-    # Get the initial count of documents in the collection and set a retriever
-    print(f"Number of text documents in the database: {text_collection.count()}")
-    print(f"Number of image documents in the database: {image_collection.count()}")
-    return vectordb_text, vectordb_images, text_collection, image_collection
-
-def add_NLMCXR_to_vectorstore(dataset_file, text_collection, image_collection):
+def add_NLMCXR_to_vectorstore(RAG):
     # Add the text from the uploaded PDF to the vectorstore by embedding it and adding it to the collection
     
-    #'~/Desktop/Nuno/rag_data/NLMCXR_png'
-    # Load the text from the uploaded PDF
-    
-    embedder = ReportAndImageEmbeddings()
-    
-    
-    #dataset = open(dataset_file.path)
-    dataset = open(dataset_file)
-    dataset = json.load(dataset)
-    
-    for entry in dataset:
-        # join report fields into  a single set of texts
-        text = ''.join([dataset[entry]['report'][description] for description in dataset[entry]['report'].keys()])
-        
-        embedding_text = embedder.embed_reports([text])
-        text_collection.add(
-                ids=[entry],
-                embeddings=[embedding_text],
-                documents=[text],
-                metadatas=[{"source": "NLMCXR", "uid": entry, 
-                            'n_images': len(list(dataset[entry]['images'].keys())) if 'images' in dataset[entry] else 0}]
+    files = glob(os.path.join('/home/ccig/Desktop/Nuno/rag_data/NLMCXR_pdf_micro', '*.pdf'))
+
+    uids = list(range(len(files)))
+
+    report_ids = [file.split('/')[-1].split('.pdf')[0] for file in files]
+
+    metadata = {uids[i]: {'file_name':report_ids[i]} for i in range(len(uids))}
+
+    for i, file in enumerate(files):
+
+        RAG.index(
+            input_path=file,
+            index_name='Documents', # index will be saved at index_root/index_name/
+            doc_ids=[uids[i]],
+            store_collection_with_index=True,
+            overwrite=True,
+            #metadata=metadata,
+
         )
 
-        if 'images' in dataset[entry]:
-            img_embeddings = []
-            info = {
-                'source': [],
-                'uid': [],
-                'uid_img': [],
-                'caption': [],
-                'path': []
-            }
-            for i, img in enumerate(dataset[entry]['images'].keys()):
-                info['source'].append('NLMCXR')
-                info['uid'].append(entry)
-                info['uid_img'].append(img)
-                info['caption'].append(dataset[entry]['images'][img]['caption'])
-                info['path'].append(dataset[entry]['images'][img]['path'])
-                image = process_image(dataset[entry]['images'][img]['path'])
-                embedding_img = embedder.embed_images(image)
-                img_embeddings.append(embedding_img)
-            
-        
-            image_collection.add(
-                ids=[entry+'_'+str(img_num) for img_num in range(len(list(dataset[entry]['images'].keys())))],
-                embeddings=img_embeddings,
-                documents=list(dataset[entry]['images'].keys()),
-                #metadatas=[{"source": "NLMCXR", "uid":entry ,"uid_img": imgid} for imgid in imgs_ids]
-                metadatas=flatten_dict(info)
-            )
+    json_data = json.dumps(metadata, indent = 4)
+    with open("metadata.json", "w") as outfile:
+        outfile.write(json_data)
 
-            
-# to flaten a multi dict into a list of single dicts, for metadata
-def flatten_dict(input_dict):
-    # Get the number of entries for each key
-    n = len(next(iter(input_dict.values())))
-    
-    # Create the list of dictionaries
-    return [
-        {key: input_dict[key][i] for key in input_dict}
-        for i in range(n)
+    return metadata
+
+
+def create_generator_model():
+    model = Qwen2VLForConditionalGeneration.from_pretrained("Qwen/Qwen2-VL-2B-Instruct",trust_remote_code=True, torch_dtype=torch.bfloat16).to('cuda:3').eval()
+    processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct", trust_remote_code=True)
+
+    return model, processor
+     
+
+def retrieve_similar_report(RAG, query, k=1):
+
+    results = RAG.search(query, k=k)
+
+    return results
+
+def generate_reply(llm, processor, query, retrieved, metadata, k=1):
+
+    image_index = retrieved[0]["page_num"] - 1
+
+    image = convert_from_path(os.path.join('/home/ccig/Desktop/Nuno/rag_data/NLMCXR_pdf', f'{metadata[retrieved[0]["doc_id"]]["file_name"]}.pdf'))
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "image": image[image_index],
+                },
+                {"type": "text", "text": query},
+            ],
+        }
     ]
+        
 
+    text = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
 
-def retrieve_similar_report(vector_db, query, collection, vector_db_images=None, image_collection=None):
+    image_inputs, video_inputs = process_vision_info(messages)
+    inputs = processor(
+        text=[text],
+        images=image_inputs,
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+    )
+    inputs = inputs.to("cuda:3")
+        
 
-    query_data = open(query)
-    query_data = json.load(query_data)
+    generated_ids = llm.generate(**inputs, max_new_tokens=50)
+    generated_ids_trimmed = [
+        out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+    ]
+    output_text = processor.batch_decode(
+        generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+    )
 
-    key = list(query_data.keys())[0]
-
-    text = ''.join([query_data[key]['report'][description] for description in query_data[key]['report'].keys()])
-
-    search_results = vector_db.similarity_search_with_score(query=[text])
-    
-    search_results = sorted(search_results, key=lambda x: x[1], reverse=True)
-
-    print(search_results)
-
-    if image_collection == None:
-        return search_results
-    else:
-        img_ids = [ search_results[0][0].metadata['uid']+'_'+str(i) for i in range(search_results[0][0].metadata['n_images'])]
-        retireved = image_collection.get(ids=img_ids)
-
-        return search_results, retireved
+    return output_text
 
 def get_relevant_documents(vector_db, query, threshold, collection):
     search_results = vector_db.similarity_search_with_score(query, collection.count())
@@ -186,36 +176,37 @@ def process_image(image_file):
     return image_data
 
 
-class ReportAndImageEmbeddings():
+class MedicalReportsEmbedding():
     def __init__(self):
-        #hf_AaHkBxdNvbEdtmmocTdqMyrhckxHVzuAiZQZ
-        self.vision_model = AutoModel.from_pretrained('OpenGVLab/InternViT-6B-448px-V1-5', torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True).to(torch.device("cuda:2")).eval()
-        self.vision_processor = CLIPImageProcessor.from_pretrained('OpenGVLab/InternViT-6B-448px-V1-5', trust_remote_code=True)
-        
-        self.text_model = AutoModel.from_pretrained('nvidia/NV-Embed-v1', trust_remote_code=True)
-        
-        # Check if the model has the expected method
-        #if not hasattr(self.vision_model, 'get_image_features'):
-        #    raise AttributeError("The vision model does not have a 'get_image_features' method. Please choose a compatible model.")
+        self.model_name = "vidore/colpali-v1.2"
+        self.model = ColPali.from_pretrained("vidore/colpaligemma-3b-pt-448-base", torch_dtype=torch.bfloat16, device_map="cuda").eval()
+        self.model.load_adapter(self.model_name)
+        self.model = self.model.eval()
+        self.processor = AutoProcessor.from_pretrained(self.model_name)
 
-    def embed_images(self, image):
-        pixel_values = self.vision_processor(images=image, return_tensors='pt').pixel_values
-        pixel_values = pixel_values.to(torch.bfloat16).to(torch.device("cuda:2"))
+    def embed_documents(self, image):
 
-        output = self.vision_model(pixel_values)
+        processed_image = process_images(self.processor, image)
+
+        #print(processed_image)
+
+        processed_image = {k: v.to(self.model.device) for k, v in processed_image.items()}
+
+        with torch.no_grad():
+            embeddings_doc = self.model(**processed_image)
+
+        print(embeddings_doc.shape)
+        return torch.unbind(embeddings_doc.to("cpu"))[0].tolist()
+
+        #pixel_values = self.vision_processor(images=image, return_tensors='pt').pixel_values
+        #pixel_values = pixel_values.to(torch.bfloat16).to(torch.device("cuda:2"))
+
+        #output = self.vision_model(pixel_values)
         #print(output.last_hidden_state.shape)
         #print(output.pooler_output.shape)
         #print(output.last_hidden_state.element_size() * output.last_hidden_state.nelement())
-        output = output.pooler_output.cpu().detach()
-        return output[-1].tolist()
-            
-    def embed_reports(self, text):
-        text_embeddings = self.text_model.encode(text, instruction="", max_length=4096)
-        text_embeddings = F.normalize(text_embeddings, p=2, dim=1)
-        #print(text)
-        #print(text_embeddings.shape)
-        #print(text_embeddings.element_size() * text_embeddings.nelement())
-        return text_embeddings[-1].tolist()
+        #output = output.pooler_output.cpu().detach()
+        #return output[-1].tolist()
 
     def embed_query(self, document):
         #print(type(document))
