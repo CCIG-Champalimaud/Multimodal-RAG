@@ -86,7 +86,7 @@ def retrieve_similar_report(RAG, query, k=1):
 
     return results
 
-def generate_reply(llm, processor, query, retrieved, metadata, k=1):
+def generate_reply(llm, processor, query, retrieved, metadata):
 
     image_index = retrieved[0]["page_num"] - 1
 
@@ -121,7 +121,7 @@ def generate_reply(llm, processor, query, retrieved, metadata, k=1):
     inputs = inputs.to("cuda:3")
         
 
-    generated_ids = llm.generate(**inputs, max_new_tokens=50)
+    generated_ids = llm.generate(**inputs, max_new_tokens=200)
     generated_ids_trimmed = [
         out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]

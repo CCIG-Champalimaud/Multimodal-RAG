@@ -15,27 +15,20 @@ from ClassificationWriter import ClassificationWriter, generate_random_id
 from EmbeddingFunctions import *
 from langchain_community.embeddings import HuggingFaceEmbeddings
 
-st.title("🦜🔗 RAG App")
+st.title("🦜🔗 Medical Report RAG App")
 
 # Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+if "context_length" not in st.session_state:
+    st.session_state.context_length = 1
 
 # Display chat messages from history on app rerun
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Define a template for the chat
-template = """Use only the given context to answer the question. 
-You can not use any knowledge that isn't present in the context.
-If you can't answer the question using only the provided context say 'I don't have enough context to answer the question'". 
-Don't hallucinate.
-context: {context}
-question: {question} according to the provided context?
-
-Answer:"""
-prompt = ChatPromptTemplate.from_template(template)
 
 if "rag" not in st.session_state:
     rag, metadata = initialize_multimodal_vector_database()
@@ -53,6 +46,9 @@ if 'button_clicked' not in st.session_state:
 def update_output(button_name, output):
     st.session_state.button_clicked = button_name
     st.session_state.output_text = output
+
+if st.text_input('Context Length: '):
+    st.session_state.context_length = int(st.text_input('Context Length: '))
 
 #if st.button("Embed Dataset", type="primary"):
 #    update_output("Embed Dataset", "Embedding dataset...")
@@ -107,8 +103,8 @@ if message := st.chat_input("Ask me anything"):
     # Display assistant response in chat message container
     with st.chat_message("assistant"):
         llm, processor  = create_generator_model()
-        retrieved = retrieve_similar_report(st.session_state.rag, message, 1)
-        response = generate_reply(llm, processor, message, retrieved, st.session_state.metadata, 1)
+        retrieved = retrieve_similar_report(st.session_state.rag, message, st.session_state.context_length)
+        response = generate_reply(llm, processor, message, retrieved, st.session_state.metadata)
                     
         st.markdown(response[0])
 
