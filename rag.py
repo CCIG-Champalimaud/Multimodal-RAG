@@ -47,20 +47,10 @@ def update_output(button_name, output):
     st.session_state.button_clicked = button_name
     st.session_state.output_text = output
 
-if st.text_input('Context Length: '):
-    st.session_state.context_length = int(st.text_input('Context Length: '))
+user_input = st.text_input("Context Length:", key="1")
 
-#if st.button("Embed Dataset", type="primary"):
-#    update_output("Embed Dataset", "Embedding dataset...")
-
-#if st.button("Embed Document", type="primary"):
-#    update_output("Embed Document", "Embedding document...")
-
-#if st.button("Delete Report from DB", type="primary"):
-#     update_output("Delete Report from DB", "Deleting report from database...")
-
-#if st.button("Delete DB", type="primary"):
-#      update_output("Delete DB", "Deleting database...")
+if user_input:
+    st.session_state.context_length = int(user_input)
 
 # Handle each button separately
 
@@ -69,27 +59,6 @@ if st.text_input('Context Length: '):
 
     # Print the number of documents in the collection to check if changes were made
 #    st.write(f"dataset_micro embedded in the knowledge database! 🚀")
-    #st.write(f"Number of medical reports in the database: {document_collection.count()}")
-
-#if st.session_state.button_clicked == "Embed Document":
-#    st.write("Feature still not implemented")
-
-#if st.session_state.button_clicked == "Retrieve Report and Image":
-#    st.write("Feature still not implemented")
-    #retrieved_documents, retrieved_images = retrieve_similar_report(vector_db_text, '/home/ccig/Desktop/Nuno/rag_data/query_test.json', text_collection, vector_db_images, image_collection)
-    #img_path = plot_images(retrieved_images)
-    #st.write(f"The most similar report that I have access to is the following:")
-    #st.write(f"Unique ID: {retrieved_documents[0][0].metadata['uid']}")
-    #st.write(f"Content: {retrieved_documents[0][0].page_content}")
-    #st.write(f"Found {len(retrieved_images['ids'])} images related to the report")
-    #st.write(f"Images shown below:")
-    #st.image(img_path, caption="Retrieved Image", use_column_width="auto")
-
-#if st.session_state.button_clicked == "Delete DB":
-#    st.write("Feature still not implemented")
-
-#if st.session_state.button_clicked == "Delete Report from DB":
-#    st.write("Feature still not implemented")
 
 
 # React to user input
